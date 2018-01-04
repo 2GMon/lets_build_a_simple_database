@@ -3,6 +3,8 @@
 #include <stdbool.h>
 #include <unistd.h>
 
+char *strtok(char *s1, const char *s2);
+
 struct InputBuffer_t {
     char* buffer;
     size_t buffer_length;
@@ -30,6 +32,8 @@ typedef enum MetaCommandResult_t MetaCommandResult;
 
 enum PrepareResult_t {
     PREPARE_SUCCESS,
+    PREPARE_NEGATIVE_ID,
+    PREPARE_STRING_TOO_LONG,
     PREPARE_SYNTAX_ERROR,
     PREPARE_UNRECOGNIZED_STATEMENT
 };
@@ -50,8 +54,8 @@ typedef enum StatementType_t StatementType;
 #define COLUMN_EMAIL_SIZE 255
 struct Row_t {
     u_int32_t id;
-    char username[COLUMN_USERNAME_SIZE];
-    char email[COLUMN_EMAIL_SIZE];
+    char username[COLUMN_USERNAME_SIZE+1];
+    char email[COLUMN_EMAIL_SIZE+1];
 };
 typedef struct Row_t Row;
 
@@ -69,11 +73,11 @@ typedef struct Statement_t Statement;
 #define ID_OFFSET 0
 #define USERNAME_OFFSET ID_OFFSET + ID_SIZE
 #define EMAIL_OFFSET USERNAME_OFFSET + USERNAME_SIZE
-#define ROW_SIZE ID_SIZE + USERNAME_SIZE + EMAIL_SIZE
+const u_int32_t ROW_SIZE = ID_SIZE + USERNAME_SIZE + EMAIL_SIZE;
 
 #define PAGE_SIZE 4096
 #define TABLE_MAX_PAGES 100
-#define ROWS_PER_PAGE PAGE_SIZE / ROW_SIZE
+#define ROWS_PER_PAGE 14
 #define TABLE_MAX_ROWS ROWS_PER_PAGE * TABLE_MAX_PAGES
 
 struct Table_t {
@@ -106,21 +110,44 @@ void* row_slot(Table* table, u_int32_t row_num) {
         page = table->pages[page_num] = malloc(PAGE_SIZE);
     }
     u_int32_t row_offset = row_num % ROWS_PER_PAGE;
-    u_int32_t byte_offset = row_offset * ROW_SIZE;
+    u_int32_t byte_offset = row_offset * 293;
     return page + byte_offset;
+}
+
+PrepareResult prepare_insert(InputBuffer* input_buffer, Statement* statement) {
+    statement->type = STATEMENT_INSERT;
+
+    char* keyword = strtok(input_buffer->buffer, " ");
+    char* id_string = strtok(NULL, " ");
+    char* username = strtok(NULL, " ");
+    char* email = strtok(NULL, " ");
+
+    if (id_string == NULL || username == NULL || email == NULL) {
+        return PREPARE_SYNTAX_ERROR;
+    }
+
+    int id = atoi(id_string);
+    if (id < 0) {
+        return PREPARE_NEGATIVE_ID;
+    }
+    if (strlen(username) > COLUMN_USERNAME_SIZE) {
+        return PREPARE_STRING_TOO_LONG;
+    }
+    if (strlen(email) > COLUMN_EMAIL_SIZE) {
+        return PREPARE_STRING_TOO_LONG;
+    }
+
+    statement->row_to_insert.id = id;
+    strcpy(statement->row_to_insert.username, username);
+    strcpy(statement->row_to_insert.email, email);
+
+    return PREPARE_SUCCESS;
 }
 
 PrepareResult prepare_statement(InputBuffer* input_buffer,
         Statement* statement) {
     if (strncmp(input_buffer->buffer, "insert", 6) == 0) {
-        statement->type = STATEMENT_INSERT;
-        int args_assigned = sscanf(
-                input_buffer->buffer, "insert %d %s %s", &(statement->row_to_insert.id),
-                statement->row_to_insert.username, statement->row_to_insert.email);
-        if (args_assigned < 3) {
-            return PREPARE_SYNTAX_ERROR;
-        }
-        return PREPARE_SUCCESS;
+        return prepare_insert(input_buffer, statement);
     }
     if (strcmp(input_buffer->buffer, "select") == 0) {
         statement->type = STATEMENT_SELECT;
@@ -205,6 +232,12 @@ int main(int argc, char* argv[]) {
         switch (prepare_statement(input_buffer, &statement)) {
             case (PREPARE_SUCCESS):
                 break;
+            case (PREPARE_NEGATIVE_ID):
+                printf("ID must be positive.\n");
+                continue;
+            case (PREPARE_STRING_TOO_LONG):
+                printf("String is too long.\n");
+                continue;
             case (PREPARE_SYNTAX_ERROR):
                 printf("Syntax error. Could not parse statement.\n");
                 continue;
